@@ -190,20 +190,46 @@ sequenceDiagram
 
 ### Success Paths
 
-1. **Normal Fence Operation**
+1. **Normal Fence Operation (Without ignore-tag-write-failure)**
 ```
 Start
 ├── Validate AWS credentials
 ├── Check for self-fencing (if enabled)
 ├── Check instance is running
 ├── Backup security groups (with chunking)
-├── Create lastfence tag (if tag writes enabled)
+│   ├── Create backup tags for each interface
+│   └── Verify backup tag creation
+├── Create lastfence tag
 ├── Modify security groups
+│   ├── Remove specified groups
+│   └── Verify modifications
 ├── [Optional] Shutdown instance
 └── Success
 ```
 
-2. **Normal Unfence Operation**
+2. **Fence Operation (With ignore-tag-write-failure)**
+```
+Start
+├── Validate AWS credentials
+├── Check for self-fencing (if enabled)
+├── Check instance is running
+├── Attempt backup tag creation
+│   ├── Success: Create backup tags
+│   └── Failure: Log warning and continue
+├── Attempt lastfence tag creation
+│   ├── Success: Create tag
+│   └── Failure: Log warning and continue
+├── Modify security groups
+│   ├── Remove specified groups
+│   ├── Verify modifications
+│   └── Check all interfaces modified
+│       ├── All modified: Success
+│       └── Partial: Fail with modification error
+├── [Optional] Shutdown instance
+└── Success (if security groups modified)
+```
+
+3. **Normal Unfence Operation**
 ```
 Start
 ├── Validate AWS credentials
@@ -221,40 +247,100 @@ Start
 ```
 Start
 ├── Invalid AWS credentials
+│   ├── Missing credentials
+│   ├── Invalid access key
+│   ├── Invalid secret key
+│   └── Invalid region
 └── Fail with auth error
 ```
 
 2. **Instance State Failures**
 ```
 Start
+├── Instance not found
+│   └── Fail with instance error
 ├── Instance not in required state
-└── Fail with state error
+│   └── Fail with state error
+└── Self-fencing detected
+    └── Fail with self-fencing error
 ```
 
-3. **Security Group Operation Failures**
+3. **Security Group Operation Failures (Without ignore-tag-write-failure)**
 ```
 Start
 ├── Backup creation fails
-│   ├── [If ignore-tag-write-failure]
-│   │   └── Continue with SG modifications
-│   └── [Otherwise]
-│       └── Fail with backup error
+│   ├── Tag size too large
+│   ├── API error
+│   └── Fail with backup error
 ├── Security group modification fails
+│   ├── Permission denied
+│   ├── Invalid group ID
+│   ├── Rate limit exceeded
 │   └── Fail with modification error
 └── Restoration fails
+    ├── Missing backup data
+    ├── Invalid backup format
+    ├── Modification error
     └── Fail with restore error
 ```
 
-4. **Tag Operation Failures**
+4. **Security Group Operation Failures (With ignore-tag-write-failure)**
+```
+Start
+├── Backup creation fails
+│   ├── Log warning
+│   └── Continue to modifications
+├── Security group modification attempt
+│   ├── Success: All interfaces modified
+│   │   └── Continue to completion
+│   ├── Partial success
+│   │   ├── Verify fencing state
+│   │   │   ├── Sufficient interfaces modified
+│   │   │   │   └── Continue to completion
+│   │   │   └── Insufficient modifications
+│   │   │       └── Fail with partial error
+│   │   └── Log warning
+│   └── Complete failure
+│       └── Fail with modification error
+├── [Optional] Shutdown attempt
+│   ├── Success
+│   │   └── Continue to completion
+│   └── Failure
+│       └── Log warning (non-fatal)
+└── Final state determined by SG modifications
+```
+
+5. **Tag Operation Failures (Without ignore-tag-write-failure)**
 ```
 Start
 ├── Tag creation fails
-│   ├── [If ignore-tag-write-failure]
-│   │   └── Continue operation
-│   └── [Otherwise]
-│       └── Fail with tag error
+│   ├── Size limit exceeded
+│   ├── API error
+│   └── Fail with tag error
 ├── Tag retrieval fails
+│   ├── Missing tags
+│   ├── Invalid format
 │   └── Fail with retrieval error
+└── Tag cleanup fails
+    └── Warning (non-fatal)
+```
+
+6. **Tag Operation Failures (With ignore-tag-write-failure)**
+```
+Start
+├── Backup tag creation fails
+│   ├── Log warning
+│   └── Continue operation
+├── Lastfence tag creation fails
+│   ├── Log warning
+│   └── Continue operation
+├── Tag retrieval fails
+│   ├── Check security group state
+│   │   ├── Groups properly modified
+│   │   │   └── Continue operation
+│   │   └── Groups not modified
+│   │       └── Fail with SG error
+│   └── Log warning
 └── Tag cleanup fails
     └── Warning (non-fatal)
 ```
